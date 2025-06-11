@@ -906,7 +906,7 @@ Region Proposal Network（RPN，区域建议网络）是 Mask R-CNN/Faster R-CNN
     RPN 负责从整张图片中自动、高效地提出可能包含目标的区域，极大减少后续检测/分割的计算量，是两阶段检测器的核心创新之一。
 '''
 
-def rpn_graph(feature_map, anchors_per_location, anchor_stride):
+def rpn_graph(feature_map, anchors_per_location, anchor_stride): # 构建 RPN 的前向计算图，输入为主干网络输出的特征图，输出为每个 anchor 的前景/背景分类分数和边框回归量。
     """Builds the computation graph of Region Proposal Network.
 
     feature_map: backbone features [batch, height, width, depth]
@@ -950,7 +950,7 @@ def rpn_graph(feature_map, anchors_per_location, anchor_stride):
     return [rpn_class_logits, rpn_probs, rpn_bbox]
 
 
-def build_rpn_model(anchor_stride, anchors_per_location, depth):
+def build_rpn_model(anchor_stride, anchors_per_location, depth): # 将 rpn_graph 封装为 Keras Model，便于多次调用和权重共享。
     """Builds a Keras model of the Region Proposal Network.
     It wraps the RPN graph so it can be used multiple times with shared
     weights.
@@ -1093,7 +1093,7 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
 #  Loss Functions
 ############################################################
 
-def smooth_l1_loss(y_true, y_pred):
+def smooth_l1_loss(y_true, y_pred): # 实现 Smooth-L1 损失（Huber 损失），常用于回归任务（如边框回归），对异常值不敏感。
     """Implements Smooth-L1 loss.
     y_true and y_pred are typically: [N, 4], but could be any shape.
     """
@@ -1103,7 +1103,7 @@ def smooth_l1_loss(y_true, y_pred):
     return loss
 
 
-def rpn_class_loss_graph(rpn_match, rpn_class_logits):
+def rpn_class_loss_graph(rpn_match, rpn_class_logits): # 计算 RPN（区域建议网络）中 anchor 的前景/背景二分类损失（交叉熵）。
     """RPN anchor classifier loss.
 
     rpn_match: [batch, anchors, 1]. Anchor match type. 1=positive,
@@ -1128,7 +1128,7 @@ def rpn_class_loss_graph(rpn_match, rpn_class_logits):
     return loss
 
 
-def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
+def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox): # 计算 RPN 的边框回归损失（Smooth-L1），只对正样本 anchor 计算损失。
     """Return the RPN bounding box loss graph.
 
     config: the model config object.
@@ -1157,7 +1157,7 @@ def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
     return loss
 
 
-def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
+def mrcnn_class_loss_graph(target_class_ids, pred_class_logits, # 计算二阶段分类头（classifier head）的多类别交叉熵损失。
                            active_class_ids):
     """Loss for the classifier head of Mask RCNN.
 
@@ -1193,7 +1193,7 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     return loss
 
 
-def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
+def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox): # 计算二阶段分类头（classifier head）的多类别交叉熵损失。
     """Loss for Mask R-CNN bounding box refinement.
 
     target_bbox: [batch, num_rois, (dy, dx, log(dh), log(dw))]
@@ -1224,7 +1224,7 @@ def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     return loss
 
 
-def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
+def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks): # 计算掩码头（mask head）的二元交叉熵损失。
     """Mask binary cross-entropy loss for the masks head.
 
     target_masks: [batch, num_rois, height, width].
@@ -1267,7 +1267,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
 #  Data Generator
 ############################################################
 
-def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
+def load_image_gt(dataset, config, image_id, augment=False, augmentation=None, # 加载一张图片及其对应的掩码、类别、边框，并进行预处理（如resize、增强、mini-mask等），返回网络训练所需的所有 GT（ground truth）信息。
                   use_mini_mask=False):
     """Load and return ground truth data for an image (image, mask, bounding boxes).
 
@@ -1370,7 +1370,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
     return image, image_meta, class_ids, bbox, mask
 
 
-def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
+def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config): # 为二阶段分类和掩码头生成训练目标（调试或不使用RPN时用），包括正负样本采样、类别、回归量和掩码标签。
     """Generate targets for training Stage 2 classifier and mask heads.
     This is not used in normal training. It's useful for debugging or to train
     the Mask RCNN heads without using the RPN head.
@@ -1526,7 +1526,7 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
     return rois, roi_gt_class_ids, bboxes, masks
 
 
-def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
+def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config): # 根据 anchors 和 GT boxes，计算每个 anchor 的正负/中性标签（rpn_match）和回归目标（rpn_bbox），用于 RPN 训练。
     """Given the anchors and GT boxes, compute overlaps and identify positive
     anchors and deltas to refine them to match their corresponding GT boxes.
 
@@ -1637,7 +1637,7 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
     return rpn_match, rpn_bbox
 
 
-def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
+def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes): # 生成一批随机 ROI proposals，模拟 RPN 输出，用于不训练 RPN 时调试 Mask R-CNN heads。
     """Generates ROI proposals similar to what a region proposal network
     would generate.
 
@@ -1711,7 +1711,7 @@ def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
     return rois
 
 
-def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
+def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None, # 核心数据生成器，循环输出训练/验证所需的 batch 数据。
                    random_rois=0, batch_size=1, detection_targets=False,
                    no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
