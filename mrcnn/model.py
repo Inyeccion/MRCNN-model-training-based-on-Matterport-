@@ -35,7 +35,7 @@ assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 #  Utility Functions
 ############################################################
 
-def log(text, array=None):
+def log(text, array=None):#打印日志信息，可选打印数组的形状、最小值、最大值和类型
     """Prints a text message. And, optionally, if a Numpy array is provided it
     prints it's shape, min, and max values.
     """
@@ -50,7 +50,7 @@ def log(text, array=None):
     print(text)
 
 
-class BatchNorm(KL.BatchNormalization):
+class BatchNorm(KL.BatchNormalization):#扩展 Keras 的 BatchNormalization 层，便于统一管理 BN 层的训练/冻结行为
     """Extends the Keras BatchNormalization class to allow a central place
     to make changes if needed.
 
@@ -68,7 +68,7 @@ class BatchNorm(KL.BatchNormalization):
         return super(self.__class__, self).call(inputs, training=training)
 
 
-def compute_backbone_shapes(config, image_shape):
+def compute_backbone_shapes(config, image_shape):#计算主干网络每个阶段输出特征图的空间尺寸
     """Computes the width and height of each stage of the backbone network.
 
     Returns:
@@ -88,12 +88,13 @@ def compute_backbone_shapes(config, image_shape):
 ############################################################
 #  Resnet Graph
 ############################################################
+# 将图片转换成特征图
 
 # Code adopted from:
 # https://github.com/fchollet/deep-learning-models/blob/master/resnet50.py
 
 def identity_block(input_tensor, kernel_size, filters, stage, block,
-                   use_bias=True, train_bn=True):
+                   use_bias=True, train_bn=True):#定义了两个卷积块，也就是两种不同的卷积方式
     """The identity_block is the block that has no conv layer at shortcut
     # Arguments
         input_tensor: input tensor
@@ -168,13 +169,13 @@ def conv_block(input_tensor, kernel_size, filters, stage, block,
     return x
 
 
-def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
+def resnet_graph(input_image, architecture, stage5=False, train_bn=True):#残差神经网络，调用两个卷积块得到特征图
     """Build a ResNet graph.
         architecture: Can be resnet50 or resnet101
         stage5: Boolean. If False, stage5 of the network is not created
         train_bn: Boolean. Train or freeze Batch Norm layers
     """
-    assert architecture in ["resnet50", "resnet101"]
+    assert architecture in ["resnet50", "resnet101"]#如果输入的architecture不是resnet50或resnet101，则报错
     # Stage 1
     x = KL.ZeroPadding2D((3, 3))(input_image)
     x = KL.Conv2D(64, (7, 7), strides=(2, 2), name='conv1', use_bias=True)(x)
@@ -203,14 +204,18 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
         C5 = x = identity_block(x, 3, [512, 512, 2048], stage=5, block='c', train_bn=train_bn)
     else:
         C5 = None
-    return [C1, C2, C3, C4, C5]
+    return [C1, C2, C3, C4, C5]#调用上述两个卷积块进行特征提取
 
 
 ############################################################
 #  Proposal Layer
 ############################################################
+'''
+1.用神经网络回归检测框，并且对检测框进行二分类（positive、negative）；
+2.输出过滤后的positive检测框（RoI）。
+'''
 
-def apply_box_deltas_graph(boxes, deltas):
+def apply_box_deltas_graph(boxes, deltas):#工具方法，输入Bbox坐标和delta，输出根据delta精调后的Bbox
     """Applies the given deltas to the given boxes.
     boxes: [N, (y1, x1, y2, x2)] boxes to update
     deltas: [N, (dy, dx, log(dh), log(dw))] refinements to apply
@@ -234,7 +239,7 @@ def apply_box_deltas_graph(boxes, deltas):
     return result
 
 
-def clip_boxes_graph(boxes, window):
+def clip_boxes_graph(boxes, window):#工具方法，输入bbox和window，输出这两个区域的重合部分的坐标
     """
     boxes: [N, (y1, x1, y2, x2)]
     window: [4] in the form y1, x1, y2, x2
@@ -252,7 +257,7 @@ def clip_boxes_graph(boxes, window):
     return clipped
 
 
-class ProposalLayer(KE.Layer):
+class ProposalLayer(KE.Layer):#继承KE.Layer类
     """Receives anchor scores and selects a subset to pass as proposals
     to the second stage. Filtering is done based on anchor scores and
     non-max suppression to remove overlaps. It also applies bounding
@@ -274,19 +279,30 @@ class ProposalLayer(KE.Layer):
         self.nms_threshold = nms_threshold
 
     def call(self, inputs):
+    # =================== 初始化ProposalLayer class ===================
+        # 在初始部分我们获取[rpn_class, rpn_bbox, anchors]三个张量作为参数
         # Box Scores. Use the foreground class confidence. [Batch, num_rois, 1]
-        scores = inputs[0][:, :, 1]
+        scores = inputs[0][:, :, 1] # 只需要全部候选框的前景得分
         # Box deltas [batch, num_rois, 4]
+        # 记录坐标修正信息：(dy, dx, log(dh), log(dw)). [batch, num_rois, 4]
         deltas = inputs[1]
         deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 4])
-        # Anchors
+        # Anchors 记录坐标信息：(y1, x1, y2, x2). [batch, num_rois, 4]
         anchors = inputs[2]
 
+    # =================== 筛选前k个锚框 ===================
         # Improve performance by trimming to top anchors by score
         # and doing the rest on the smaller subset.
+        # 获取前景得分最大的n个候选框
         pre_nms_limit = tf.minimum(self.config.PRE_NMS_LIMIT, tf.shape(anchors)[1])
+        # 输入矩阵时 输出每一行的 top k. [batch, top_k]
         ix = tf.nn.top_k(scores, pre_nms_limit, sorted=True,
                          name="top_anchors").indices
+        # 提取top k锚框，我们同时对三个输入进行了提取
+        # batch_slice函数：
+        # #   将batch特征拆分为单张
+        # #   然后提取指定的张数
+        # #   使用单张特征处理函数处理，并合并（此时返回的第一维不是输入时的batch，而是上步指定的张数）
         scores = utils.batch_slice([scores, ix], lambda x, y: tf.gather(x, y),
                                    self.config.IMAGES_PER_GPU)
         deltas = utils.batch_slice([deltas, ix], lambda x, y: tf.gather(x, y),
@@ -294,7 +310,12 @@ class ProposalLayer(KE.Layer):
         pre_nms_anchors = utils.batch_slice([anchors, ix], lambda a, x: tf.gather(a, x),
                                     self.config.IMAGES_PER_GPU,
                                     names=["pre_nms_anchors"])
-
+        '''
+        关于batch_slice: 这个函数将只支持batch为1的函数进行了扩展（实际就是不能有batch维度的函数），
+        tf.gather函数只能进行一维数组的切片，而scares为2维[batch, num_rois]，
+        相对的ix也是二维[batch, top_k]，所以我们需要将两者切片应用函数后将结果拼接。
+        '''
+    # =================== 锚框坐标初调 ===================使用RPN回归的结果取修正top k锚框的坐标
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]
         boxes = utils.batch_slice([pre_nms_anchors, deltas],
@@ -304,12 +325,16 @@ class ProposalLayer(KE.Layer):
 
         # Clip to image boundaries. Since we're in normalized coordinates,
         # clip to 0..1 range. [batch, N, (y1, x1, y2, x2)]
+        '''
+        我们的锚框坐标实际上是位于一个归一化了的图上, 上一步的修正进行之后不再能够保证这一点，
+        所以我们需要切除锚框越界的的部分（即只保留锚框和[0,0,1,1]画布的交集），通过调用clip_boxes_graph
+        '''
         window = np.array([0, 0, 1, 1], dtype=np.float32)
         boxes = utils.batch_slice(boxes,
                                   lambda x: clip_boxes_graph(x, window),
                                   self.config.IMAGES_PER_GPU,
                                   names=["refined_anchors_clipped"])
-
+    # =================== 非极大值抑制 ===================确保不会出现过于重复的推荐区域
         # Filter out small boxes
         # According to Xinlei Chen's paper, this reduces detection accuracy
         # for small objects, so we're skipping it.
@@ -320,13 +345,14 @@ class ProposalLayer(KE.Layer):
                 boxes, scores, self.proposal_count,
                 self.nms_threshold, name="rpn_non_max_suppression")
             proposals = tf.gather(boxes, indices)
-            # Pad if needed
+            # Pad if needed 一旦返回数目不足，填充(0,0,0,0)直到数目达标
             padding = tf.maximum(self.proposal_count - tf.shape(proposals)[0], 0)
+            # 在后面添加全0行
             proposals = tf.pad(proposals, [(0, padding), (0, 0)])
             return proposals
         proposals = utils.batch_slice([boxes, scores], nms,
                                       self.config.IMAGES_PER_GPU)
-        return proposals
+        return proposals  # 至此获得全部推荐区域
 
     def compute_output_shape(self, input_shape):
         return (None, self.proposal_count, 4)
@@ -335,6 +361,12 @@ class ProposalLayer(KE.Layer):
 ############################################################
 #  ROIAlign Layer
 ############################################################
+'''
+不管输入该层的特征大小为多少，经过该层之后，一律变成固定值（即 pool_size ，一般是 7x7）。
+核心科技就是调用了这个方法：tf.crop_and_resize
+另外，不是把整张输入图片的特征变成 7x7 ，如果是那样就只有resize没有corp了。 
+PyramidROIAlign 的功能是，根据显著性物体的bbox坐标，以及显著性物体相对于整张图片面积的大小，在不同尺寸的特征图上切出显著性对象的特征。
+'''
 
 def log2_graph(x):
     """Implementation of Log2. TF doesn't have a native implementation."""
@@ -361,7 +393,7 @@ class PyramidROIAlign(KE.Layer):
     constructor.
     """
 
-    def __init__(self, pool_shape, **kwargs):
+    def __init__(self, pool_shape, **kwargs):#pool_shape决定了ROIAlign层输出的特征的shape，一般pool_shape=(7, 7)，也就是说，不管输入特征的大小是多少，输出特征大小必然是 7x7（不考虑通道数）
         super(PyramidROIAlign, self).__init__(**kwargs)
         self.pool_shape = tuple(pool_shape)
 
@@ -453,6 +485,24 @@ class PyramidROIAlign(KE.Layer):
 ############################################################
 #  Detection Target Layer
 ############################################################
+'''
+该层的目的是根据 proposals 的坐标和标注的数据，计算得到 rois 坐标、proposals的坐标偏离值 deltas、掩码。
+主要实现了训练阶段二阶段检测头（分类和掩码头）所需的目标采样与标签生成，即：
+1.正负样本采样：
+    根据 RPN 提供的 proposals（候选框）和 GT（真实框）计算 IoU，选出正样本（IoU≥0.5）和负样本（IoU<0.5 且不属于 crowd 区域）。
+    按比例（如1:2）随机采样正负样本，保证每张图片用于训练的 ROI 数量固定。
+2.标签分配：
+    为每个正样本分配一个最匹配的 GT 框和类别。
+    计算正样本的回归目标（bbox refinement）。
+    生成正样本对应的掩码（mask），并裁剪/缩放到网络输出尺寸。
+3.输出格式：
+    返回采样后的 proposals（rois）、类别标签（class_ids）、回归目标（deltas）、掩码（masks），并对不足部分用0填充。
+4.实现方式：
+    主要由 detection_targets_graph 函数实现具体采样和标签生成逻辑。
+    DetectionTargetLayer 是 Keras 层，负责批量处理，供模型训练时调用。
+5.总结：
+    Detection Target Layer 负责把 RPN 生成的候选框与真实标注对齐，采样出训练用的正负样本，并生成分类、回归和掩码的训练标签，是 Mask R-CNN 训练阶段的关键数据准备环节。
+'''
 
 def overlaps_graph(boxes1, boxes2):
     """Computes IoU overlaps between two sets of boxes.
@@ -826,6 +876,35 @@ class DetectionLayer(KE.Layer):
 ############################################################
 #  Region Proposal Network (RPN)
 ############################################################
+'''
+Region Proposal Network（RPN，区域建议网络）是 Mask R-CNN/Faster R-CNN 中的关键模块，其详细作用如下：
+
+1. 主要功能
+    RPN 的作用是在特征图上滑动生成大量锚框（anchors）并预测每个锚框是否包含前景目标，
+    以及对锚框进行边框回归调整，最终输出一批高质量的候选区域（proposals，ROI），供后续的检测和分割头进一步处理。
+2. 具体流程
+    1.输入
+        主干网络输出的特征图（如 FPN 的多层特征图）
+    2.锚框生成
+        在特征图每个位置生成多个不同尺度和长宽比的锚框（anchors）。
+    3.前景/背景分类
+        对每个锚框，RPN 预测其为前景（目标）或背景的概率（二分类）。
+    4.边框回归
+        对每个锚框，RPN 预测一个边框回归量（deltas），用于微调锚框更贴合真实目标。
+    5.候选框生成
+        用回归量调整锚框，得到 refined anchors。
+        过滤掉得分低的框和尺寸过小的框。
+        对所有候选框按得分排序，选取前 N 个（如 12000）。
+        对这些框做非极大值抑制（NMS），去除重叠度高的冗余框，最终输出固定数量（如 200 或 1000）的 proposals。
+    6.输出
+        输出 proposals（ROI），即一批高质量的候选区域，供后续的分类和掩码分支使用。
+3. 代码对应
+    rpn_graph：实现 RPN 的前向计算，包括分类和回归分支。
+    build_rpn_model：将 rpn_graph 封装为 Keras Model。
+    ProposalLayer：根据 RPN 输出的分数和回归量，生成最终的 proposals（包括排序、NMS、裁剪等）。
+4. 总结
+    RPN 负责从整张图片中自动、高效地提出可能包含目标的区域，极大减少后续检测/分割的计算量，是两阶段检测器的核心创新之一。
+'''
 
 def rpn_graph(feature_map, anchors_per_location, anchor_stride):
     """Builds the computation graph of Region Proposal Network.
@@ -897,9 +976,14 @@ def build_rpn_model(anchor_stride, anchors_per_location, depth):
 #  Feature Pyramid Network Heads
 ############################################################
 
-def fpn_classifier_graph(rois, feature_maps, image_meta,
-                         pool_size, num_classes, train_bn=True,
-                         fc_layers_size=1024):
+#输出分类结果和bbox回归的delta
+def fpn_classifier_graph(rois,  # [batch, num_rois, (y1, x1, y2, x2)] Proposal 坐标（归一化的）
+                         feature_maps, # 特征金字塔 [P2, P3, P4, P5].
+                         image_meta, # 图片的一些信息包括原始尺寸什么的
+                         pool_size,  # ROI Pooling 后固定的特征大小，一般是 7x7 
+                         num_classes, # 类别的数量，决定了结果的 depth
+                         train_bn=True, # Boolean.控制参数可训练还是冻结
+                         fc_layers_size=1024): # 两个全连接层的尺寸
     """Builds the computation graph of the feature pyramid network classifier
     and regressor heads.
 
@@ -950,9 +1034,9 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     s = K.int_shape(x)
     mrcnn_bbox = KL.Reshape((s[1], num_classes, 4), name="mrcnn_bbox")(x)
 
-    return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
+    return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox # 分类logits、softmax概率、边框回归量
 
-
+# 输出预测的mask
 def build_fpn_mask_graph(rois, feature_maps, image_meta,
                          pool_size, num_classes, train_bn=True):
     """Builds the computation graph of the mask head of Feature Pyramid Network.
@@ -970,10 +1054,10 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
     """
     # ROI Pooling
     # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
-    x = PyramidROIAlign([pool_size, pool_size],
+    x = PyramidROIAlign([pool_size, pool_size], # 对每个ROI，在FPN的不同层上做ROIAlign，获得固定大小的特征（如14x14）。
                         name="roi_align_mask")([rois, image_meta] + feature_maps)
 
-    # Conv layers
+    # Conv layers 卷积堆叠：经过多层卷积+BN+ReLU提取更丰富的特征。
     x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
                            name="mrcnn_mask_conv1")(x)
     x = KL.TimeDistributed(BatchNorm(),
@@ -998,11 +1082,11 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
                            name='mrcnn_mask_bn4')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"),
+    x = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"), # 上采样：用转置卷积（deconv）将特征上采样到更高分辨率。
                            name="mrcnn_mask_deconv")(x)
-    x = KL.TimeDistributed(KL.Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"),
+    x = KL.TimeDistributed(KL.Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"), # 输出分支：用1x1卷积输出每个类别的掩码（每个ROI输出一个[mask_height, mask_width, num_classes]的掩码概率图）。
                            name="mrcnn_mask")(x)
-    return x
+    return x # 每个ROI的每个类别的掩码概率图
 
 
 ############################################################
@@ -1823,7 +1907,7 @@ class MaskRCNN():
     The actual Keras model is in the keras_model property.
     """
 
-    def __init__(self, mode, config, model_dir):
+    def __init__(self, mode, config, model_dir): # 初始化 MaskRCNN 实例，设置模式（训练/推理）、配置、日志目录，并自动构建 Keras 模型。
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -1836,7 +1920,7 @@ class MaskRCNN():
         self.set_log_dir()
         self.keras_model = self.build(mode=mode, config=config)
 
-    def build(self, mode, config):
+    def build(self, mode, config): # 根据模式（训练/推理）构建完整的Mask R-CNN网络结构，包括主干网络、FPN、RPN、ROIAlign、分类/回归/掩码头、损失函数等，并返回Keras Model。
         """Build Mask R-CNN architecture.
             input_shape: The shape of the input image.
             mode: Either "training" or "inference". The inputs and
@@ -2063,7 +2147,7 @@ class MaskRCNN():
 
         return model
 
-    def find_last(self):
+    def find_last(self): # 查找并返回最近一次训练的权重文件路径（用于断点续训）。
         """Finds the last checkpoint file of the last trained model in the
         model directory.
         Returns:
@@ -2092,7 +2176,7 @@ class MaskRCNN():
         checkpoint = os.path.join(dir_name, checkpoints[-1])
         return checkpoint
 
-    def load_weights(self, filepath, by_name=False, exclude=None):
+    def load_weights(self, filepath, by_name=False, exclude=None): # 加载权重文件到模型中，支持按名字加载和排除部分层（可用于迁移学习或微调）。
         """Modified version of the corresponding Keras function with
         the addition of multi-GPU support and the ability to exclude
         some layers from loading.
@@ -2136,7 +2220,7 @@ class MaskRCNN():
         # Update the log directory
         self.set_log_dir(filepath)
 
-    def get_imagenet_weights(self):
+    def get_imagenet_weights(self): # 下载并返回 ImageNet 预训练权重的本地路径（用于主干网络初始化）。
         """Downloads ImageNet trained weights from Keras.
         Returns path to weights file.
         """
@@ -2150,7 +2234,7 @@ class MaskRCNN():
                                 md5_hash='a268eb855778b3df3c7506639542a6af')
         return weights_path
 
-    def compile(self, learning_rate, momentum):
+    def compile(self, learning_rate, momentum): # 配置模型的优化器、损失函数和指标，为训练做准备。
         """Gets the model ready for training. Adds losses, regularization, and
         metrics. Then calls the Keras compile() function.
         """
@@ -2198,7 +2282,7 @@ class MaskRCNN():
                 * self.config.LOSS_WEIGHTS.get(name, 1.))
             self.keras_model.metrics_tensors.append(loss)
 
-    def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
+    def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1): # 根据正则表达式设置哪些层可训练，支持只训练部分网络（如只训练 heads 或某些 stage）。
         """Sets model layers as trainable if their names match
         the given regular expression.
         """
@@ -2235,7 +2319,7 @@ class MaskRCNN():
                 log("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
 
-    def set_log_dir(self, model_path=None):
+    def set_log_dir(self, model_path=None): # 设置日志和权重保存目录，并自动管理 epoch 计数。
         """Sets the model log directory and epoch counter.
 
         model_path: If None, or a format different from what this code uses
@@ -2273,7 +2357,7 @@ class MaskRCNN():
         self.checkpoint_path = self.checkpoint_path.replace(
             "*epoch*", "{epoch:04d}")
 
-    def train(self, train_dataset, val_dataset, learning_rate, epochs, layers,
+    def train(self, train_dataset, val_dataset, learning_rate, epochs, layers, # 启动模型训练，支持数据增强、回调、分阶段训练等。
               augmentation=None, custom_callbacks=None, no_augmentation_sources=None):
         """Train the model.
         train_dataset, val_dataset: Training and validation Dataset objects.
@@ -2375,7 +2459,7 @@ class MaskRCNN():
         )
         self.epoch = max(self.epoch, epochs)
 
-    def mold_inputs(self, images):
+    def mold_inputs(self, images): # 将原始图片批量预处理为网络输入格式（归一化、resize、生成元信息等）。
         """Takes a list of images and modifies them to the format expected
         as an input to the neural network.
         images: List of image matrices [height,width,depth]. Images can have
@@ -2414,7 +2498,7 @@ class MaskRCNN():
         windows = np.stack(windows)
         return molded_images, image_metas, windows
 
-    def unmold_detections(self, detections, mrcnn_mask, original_image_shape,
+    def unmold_detections(self, detections, mrcnn_mask, original_image_shape, # 将网络输出的检测结果还原为原图坐标和掩码，便于可视化和评估。
                           image_shape, window):
         """Reformats the detections of one image from the format of the neural
         network output to a format suitable for use in the rest of the
@@ -2479,7 +2563,7 @@ class MaskRCNN():
 
         return boxes, class_ids, scores, full_masks
 
-    def detect(self, images, verbose=0):
+    def detect(self, images, verbose=0): # 推理接口，输入图片列表，输出每张图片的检测框、类别、分数和掩码。
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -2537,7 +2621,7 @@ class MaskRCNN():
             })
         return results
 
-    def detect_molded(self, molded_images, image_metas, verbose=0):
+    def detect_molded(self, molded_images, image_metas, verbose=0): # 对已预处理的图片做推理，主要用于调试。
         """Runs the detection pipeline, but expect inputs that are
         molded already. Used mostly for debugging and inspecting
         the model.
@@ -2595,7 +2679,7 @@ class MaskRCNN():
             })
         return results
 
-    def get_anchors(self, image_shape):
+    def get_anchors(self, image_shape): # 根据图片尺寸生成并缓存 anchors（锚框）。
         """Returns anchor pyramid for the given image size."""
         backbone_shapes = compute_backbone_shapes(self.config, image_shape)
         # Cache anchors and reuse if image shape is the same
@@ -2617,7 +2701,7 @@ class MaskRCNN():
             self._anchor_cache[tuple(image_shape)] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[tuple(image_shape)]
 
-    def ancestor(self, tensor, name, checked=None):
+    def ancestor(self, tensor, name, checked=None): # 在计算图中查找某个张量的祖先节点（调试用）。
         """Finds the ancestor of a TF tensor in the computation graph.
         tensor: TensorFlow symbolic tensor.
         name: Name of ancestor tensor to find
@@ -2645,7 +2729,7 @@ class MaskRCNN():
                 return a
         return None
 
-    def find_trainable_layer(self, layer):
+    def find_trainable_layer(self, layer): # 递归查找可训练层（用于 TimeDistributed 等封装层）。
         """If a layer is encapsulated by another layer, this function
         digs through the encapsulation and returns the layer that holds
         the weights.
@@ -2654,7 +2738,7 @@ class MaskRCNN():
             return self.find_trainable_layer(layer.layer)
         return layer
 
-    def get_trainable_layers(self):
+    def get_trainable_layers(self): # 返回所有有权重的可训练层。
         """Returns a list of layers that have weights."""
         layers = []
         # Loop through all layers
@@ -2666,7 +2750,7 @@ class MaskRCNN():
                 layers.append(l)
         return layers
 
-    def run_graph(self, images, outputs, image_metas=None):
+    def run_graph(self, images, outputs, image_metas=None): # 运行部分计算图，输出指定节点结果（调试和可视化用）。
         """Runs a sub-set of the computation graph that computes the given
         outputs.
 
@@ -2723,7 +2807,7 @@ class MaskRCNN():
 ############################################################
 
 def compose_image_meta(image_id, original_image_shape, image_shape,
-                       window, scale, active_class_ids):
+                       window, scale, active_class_ids): # 将一张图片的各种关键信息（如ID、原始尺寸、处理后尺寸、有效窗口、缩放比例、有效类别等）打包成一个一维数组，便于在数据流中携带和传递。
     """Takes attributes of an image and puts them in one 1D array.
 
     image_id: An int ID of the image. Useful for debugging.
@@ -2747,7 +2831,7 @@ def compose_image_meta(image_id, original_image_shape, image_shape,
     return meta
 
 
-def parse_image_meta(meta):
+def parse_image_meta(meta): # 将 compose_image_meta 打包的一维数组还原为各个字段，便于后续处理。
     """Parses an array that contains image attributes to its components.
     See compose_image_meta() for more details.
 
@@ -2771,7 +2855,7 @@ def parse_image_meta(meta):
     }
 
 
-def parse_image_meta_graph(meta):
+def parse_image_meta_graph(meta): # 和 parse_image_meta 类似，但用于 TensorFlow 图（张量）操作，返回各字段的张量。
     """Parses a tensor that contains image attributes to its components.
     See compose_image_meta() for more details.
 
@@ -2795,7 +2879,7 @@ def parse_image_meta_graph(meta):
     }
 
 
-def mold_image(images, config):
+def mold_image(images, config): # 对输入图片做归一化处理（减去均值），并转为 float32，便于神经网络处理。
     """Expects an RGB image (or array of images) and subtracts
     the mean pixel and converts it to float. Expects image
     colors in RGB order.
@@ -2803,7 +2887,7 @@ def mold_image(images, config):
     return images.astype(np.float32) - config.MEAN_PIXEL
 
 
-def unmold_image(normalized_images, config):
+def unmold_image(normalized_images, config): # 将归一化后的图片还原为原始像素值（uint8），便于可视化。
     """Takes a image normalized with mold() and returns the original."""
     return (normalized_images + config.MEAN_PIXEL).astype(np.uint8)
 
@@ -2812,7 +2896,7 @@ def unmold_image(normalized_images, config):
 #  Miscellenous Graph Functions
 ############################################################
 
-def trim_zeros_graph(boxes, name='trim_zeros'):
+def trim_zeros_graph(boxes, name='trim_zeros'): # 去除 boxes 数组中全为 0 的行（常用于去除 padding），返回有效 boxes 及其掩码。
     """Often boxes are represented with matrices of shape [N, 4] and
     are padded with zeros. This removes zero boxes.
 
@@ -2824,7 +2908,7 @@ def trim_zeros_graph(boxes, name='trim_zeros'):
     return boxes, non_zeros
 
 
-def batch_pack_graph(x, counts, num_rows):
+def batch_pack_graph(x, counts, num_rows): # 从每一行 x 中取不同数量的元素（由 counts 指定），拼接成一个张量。常用于变长采样。
     """Picks different number of values from each row
     in x depending on the values in counts.
     """
@@ -2834,7 +2918,7 @@ def batch_pack_graph(x, counts, num_rows):
     return tf.concat(outputs, axis=0)
 
 
-def norm_boxes_graph(boxes, shape):
+def norm_boxes_graph(boxes, shape): # 将 boxes 从像素坐标归一化到 0~1 区间（相对图片尺寸），便于网络处理。
     """Converts boxes from pixel coordinates to normalized coordinates.
     boxes: [..., (y1, x1, y2, x2)] in pixel coordinates
     shape: [..., (height, width)] in pixels
@@ -2851,7 +2935,7 @@ def norm_boxes_graph(boxes, shape):
     return tf.divide(boxes - shift, scale)
 
 
-def denorm_boxes_graph(boxes, shape):
+def denorm_boxes_graph(boxes, shape): # 将归一化的 boxes 还原为像素坐标（整数），便于可视化和后处理。
     """Converts boxes from normalized coordinates to pixel coordinates.
     boxes: [..., (y1, x1, y2, x2)] in normalized coordinates
     shape: [..., (height, width)] in pixels
