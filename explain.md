@@ -116,3 +116,15 @@ MaskRCNN 类
 第182个epoch的参数
 182/1000 [====>.........................] - ETA: 4:22:48 - loss: 1.2853 - rpn_class_loss: 0.0227 - rpn_bbox_loss: 0.2909 - mrcnn_class_loss: 0.1975 - mrcnn_bbox_loss: 0.3833 - mrcnn_mask_loss: 0.3908coco.py:265: Deprecation
 
+
+# 运行训练
+终端输入
+```bash
+cd samples/coco
+
+python coco.py train --dataset=../../../coco2017 --model=coco --year=2017
+```
+
+
+
+

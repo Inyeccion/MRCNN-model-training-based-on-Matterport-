@@ -1844,7 +1844,7 @@ class MaskRCNN():
         """
         assert mode in ['training', 'inference']
 
-        # Image size must be dividable by 2 multiple times
+        # Image size must be dividable by 2 multiple times       图片必须是2^6的倍数
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
@@ -1856,8 +1856,9 @@ class MaskRCNN():
             shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
-        if mode == "training":
-            # RPN GT
+        if mode == "training":      # 两个不同的模式做的事情：1、训练模式，2、推理模式
+                                    # 这里做的是类似于初始化的工作
+            # RPN GT      box真实值
             input_rpn_match = KL.Input(
                 shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
             input_rpn_bbox = KL.Input(
@@ -1893,7 +1894,7 @@ class MaskRCNN():
         # Bottom-up Layers
         # Returns a list of the last layers of each stage, 5 in total.
         # Don't create the thead (stage 5), so we pick the 4th item in the list.
-        if callable(config.BACKBONE):
+        if callable(config.BACKBONE):     # 自定义逻辑，与本项目无关
             _, C2, C3, C4, C5 = config.BACKBONE(input_image, stage5=True,
                                                 train_bn=config.TRAIN_BN)
         else:
@@ -1940,38 +1941,38 @@ class MaskRCNN():
                               len(config.RPN_ANCHOR_RATIOS), config.TOP_DOWN_PYRAMID_SIZE)
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
-        for p in rpn_feature_maps:
+        for p in rpn_feature_maps:    # 遍历p2-p6，并且使用的是同一个RPN模型
             layer_outputs.append(rpn([p]))
         # Concatenate layer outputs
         # Convert from list of lists of level outputs to list of lists
         # of outputs across levels.
-        # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
+        # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]   # 将经过RPN的几个矩阵合并
         output_names = ["rpn_class_logits", "rpn_class", "rpn_bbox"]
         outputs = list(zip(*layer_outputs))
         outputs = [KL.Concatenate(axis=1, name=n)(list(o))
                    for o, n in zip(outputs, output_names)]
-
-        rpn_class_logits, rpn_class, rpn_bbox = outputs
+        # class_logits是为了计算损失   rpn_class表明anchor中是否有物体   rpn_bbox是anchor的回归(修正)值
+        rpn_class_logits, rpn_class, rpn_bbox = outputs    
 
         # Generate proposals
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
-        # and zero padded.
+        # and zero padded.             # 这里还是两个不同的模式传入的参数不同
         proposal_count = config.POST_NMS_ROIS_TRAINING if mode == "training"\
             else config.POST_NMS_ROIS_INFERENCE
-        rpn_rois = ProposalLayer(
-            proposal_count=proposal_count,
-            nms_threshold=config.RPN_NMS_THRESHOLD,
+        rpn_rois = ProposalLayer(                      #  1、根据score/prob(置信度)来筛掉低分anchor
+            proposal_count=proposal_count,             #  2、根据rpn_bbox来修正anchor
+            nms_threshold=config.RPN_NMS_THRESHOLD,    #  3、根据nms_threshold进行nms算法以筛选最多6000个ROI
             name="ROI",
             config=config)([rpn_class, rpn_bbox, anchors])
 
         if mode == "training":
             # Class ID mask to mark class IDs supported by the dataset the image
             # came from.
-            active_class_ids = KL.Lambda(
+            active_class_ids = KL.Lambda(    # 动态生成一个类别掩码 比如本项目只使用了1+6个类别，所以这个1+80维的张量中只有7个1，用于标记当前图片支持哪些类别，后续损失计算时只对这些类别有效
                 lambda x: parse_image_meta_graph(x)["active_class_ids"]
                 )(input_image_meta)
 
-            if not config.USE_RPN_ROIS:
+            if not config.USE_RPN_ROIS:      # 如果不使用RPN生成的ROIs，那么久使用输入的ROIs
                 # Ignore predicted ROIs and use ROIs provided as an input.
                 input_rois = KL.Input(shape=[config.POST_NMS_ROIS_TRAINING, 4],
                                       name="input_roi", dtype=np.int32)
@@ -1984,13 +1985,13 @@ class MaskRCNN():
             # Generate detection targets
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
-            # padded. Equally, returned rois and targets are zero padded.
+            # padded. Equally, returned rois and targets are zero padded.    # 由于直接使用GT会导致采样到的正样本远少于负样本，因此通过proposals与与 GT 匹配，采样一定比例的正负样本，保证模型的泛化能力和稳定性
             rois, target_class_ids, target_bbox, target_mask =\
                 DetectionTargetLayer(config, name="proposal_targets")([
                     target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
-            # Network Heads
-            # TODO: verify that this handles zero padded ROIs
+            # Network Heads                                     # classifier分支和mask分支
+            # TODO: verify that this handles zero padded ROIs   # 注意这两个分支之前的ROIAlign层是被融合在了fpn_classifier_graph和build_fpn_mask_graph函数中的
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
                 fpn_classifier_graph(rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
@@ -2006,7 +2007,7 @@ class MaskRCNN():
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
-            # Losses
+            # Losses   各种可以输出在终端的损失
             rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")(
                 [input_rpn_match, rpn_class_logits])
             rpn_bbox_loss = KL.Lambda(lambda x: rpn_bbox_loss_graph(config, *x), name="rpn_bbox_loss")(
@@ -2019,7 +2020,7 @@ class MaskRCNN():
                 [target_mask, target_class_ids, mrcnn_mask])
 
             # Model
-            inputs = [input_image, input_image_meta,
+            inputs = [input_image, input_image_meta,            # gt数据可以通过COCO数据集解析
                       input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks]
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
@@ -2039,7 +2040,7 @@ class MaskRCNN():
 
             # Detections
             # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
-            # normalized coordinates
+            # normalized coordinates                # 这一步的逻辑就是将classifier分支中的
             detections = DetectionLayer(config, name="mrcnn_detection")(
                 [rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
